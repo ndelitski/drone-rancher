@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/drone/drone-go/plugin"
-	"github.com/rancher/go-rancher/client"
+	rancherClient "github.com/rancher/go-rancher/client"
 )
 
 type Rancher struct {
@@ -18,6 +18,7 @@ type Rancher struct {
 	Image      string `json:"docker_image"`
 	StartFirst bool   `json:"start_first"`
 	Confirm    bool   `json:"confirm"`
+	Pull       bool   `json:"pull"`
 	Timeout    int    `json:"timeout"`
 }
 
@@ -57,7 +58,7 @@ func main() {
 		wantedService = vargs.Service
 	}
 
-	rancher, err := client.NewRancherClient(&client.ClientOpts{
+	rancher, err := rancherClient.NewRancherClient(&rancherClient.ClientOpts{
 		Url:       vargs.Url,
 		AccessKey: vargs.AccessKey,
 		SecretKey: vargs.SecretKey,
@@ -70,7 +71,7 @@ func main() {
 
 	var stackId string
 	if wantedStack != "" {
-		environments, err := rancher.Environment.List(&client.ListOpts{})
+		environments, err := rancher.Environment.List(&rancherClient.ListOpts{})
 		if err != nil {
 			fmt.Printf("Failed to list rancher environments: %s\n", err)
 			os.Exit(1)
@@ -88,14 +89,14 @@ func main() {
 		}
 	}
 
-	services, err := rancher.Service.List(&client.ListOpts{})
+	services, err := rancher.Service.List(&rancherClient.ListOpts{})
 	if err != nil {
 		fmt.Printf("Failed to list rancher services: %s\n", err)
 		os.Exit(1)
 	}
 
 	found := false
-	var service client.Service
+	var service rancherClient.Service
 	for _, svc := range services.Data {
 		if svc.Name == wantedService && ((wantedStack != "" && svc.EnvironmentId == stackId) || wantedStack == "") {
 			service = svc
@@ -108,14 +109,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	if vargs.Pull {
+		taskOpts := &rancherClient.PullTask{
+			Mode:   "all",
+			Image:  vargs.Image,
+		}
+
+		fmt.Printf("force pulling image %s", vargs.Image)
+
+		_, err := rancher.PullTask.Create(taskOpts)
+		
+		fmt.Println("waiting 10s")
+		time.Sleep(10 * time.Second)
+
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}
+
 	service.LaunchConfig.ImageUuid = vargs.Image
-	upgrade := &client.ServiceUpgrade{}
-	upgrade.InServiceStrategy = &client.InServiceUpgradeStrategy{
+	upgrade := &rancherClient.ServiceUpgrade{}
+	upgrade.InServiceStrategy = &rancherClient.InServiceUpgradeStrategy{
 		LaunchConfig:           service.LaunchConfig,
 		SecondaryLaunchConfigs: service.SecondaryLaunchConfigs,
 		StartFirst:             vargs.StartFirst,
 	}
-	upgrade.ToServiceStrategy = &client.ToServiceUpgradeStrategy{}
+	upgrade.ToServiceStrategy = &rancherClient.ToServiceUpgradeStrategy{}
 
 	_, err = rancher.Service.ActionUpgrade(&service, upgrade)
 	if err != nil {
@@ -142,7 +162,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		_, err = rancher.Service.ActionFinishupgrade(srv.(*client.Service))
+		_, err = rancher.Service.ActionFinishupgrade(srv.(*rancherClient.Service))
 		if err != nil {
 			fmt.Printf("Unable to finish upgrade %s: %s\n", vargs.Service, err)
 			os.Exit(1)
